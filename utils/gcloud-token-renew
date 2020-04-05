@@ -1,0 +1,11 @@
+#!/bin/bash
+PROJECT=$(gcloud config get-value project)
+CLUSTER=$(gcloud config get-value container/cluster)
+ZONE=$(gcloud config get-value compute/zone)
+echo "Renewing the bearer token ..."
+gcloud auth activate-service-account $(cat $HOME/.kube/sa.json | jq -r .client_email) --key-file=$HOME/.kube/sa.json
+TOKEN=$(gcloud auth print-access-token)
+CONTEXT="gke_${PROJECT}_${ZONE}_${CLUSTER}"
+kubectl config set-credentials $(whoami) --token=$TOKEN
+kubectl config use-context $CONTEXT
+echo "Token renewed."

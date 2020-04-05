@@ -1,0 +1,5 @@
+#!/bin/bash
+CLUSTER=openshift.master.il4.europe-west1.lb.wallet-200410.internal:8443
+echo "Renewing the bearer token ..."
+oc login $CLUSTER --certificate-authority=$HOME/.kube/openshift-ca.crt -u $USER -p password
+echo "Token renewed."

@@ -1,0 +1,245 @@
+
+// https://nixaid.com/kubernetes-from-scratch/
+
+TOKEN_PUB=$(openssl rand -hex 3)
+TOKEN_SECRET=$(openssl rand -hex 8)
+BOOTSTRAP_TOKEN="${TOKEN_PUB}.${TOKEN_SECRET}"
+
+echo $BOOTSTRAP_TOKEN
+0dfc35.a2a4885d748b98a3
+
+kubectl -n kube-system create secret generic bootstrap-token-${TOKEN_PUB} \
+        --type 'bootstrap.kubernetes.io/token' \
+        --from-literal description="cluster bootstrap token" \
+        --from-literal token-id=${TOKEN_PUB} \
+        --from-literal token-secret=${TOKEN_SECRET} \
+        --from-literal usage-bootstrap-authentication=true \
+        --from-literal usage-bootstrap-signing=true
+
+kubectl -n kube-system get secret/bootstrap-token-${TOKEN_PUB} -o yaml
+
+
+
+
+==========================
+master services
+==========================
+// API Server
+
+[Unit]
+Description=Kubernetes API Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+After=etcd.service
+[Service]
+Type=notify
+ExecStart=/usr/bin/kube-apiserver \
+  --admission-control=NamespaceLifecycle,ServiceAccount,LimitRanger,DefaultStorageClass,ResourceQuota \
+  --etcd-servers=http://127.0.0.1:2379 \
+  --advertise-address=0.0.0.0 \
+  --allow-privileged=true \
+  --insecure-bind-address=127.0.0.1 \
+  --insecure-port=8080 \
+  --bind-address=0.0.0.0 \
+  --secure-port=443 \
+  --service-cluster-ip-range=10.32.0.0/16 \
+  --service-node-port-range=30000-32767 \
+  --client-ca-file=/var/lib/kubernetes/pki/bundle-ca.pem \
+  --tls-cert-file=/var/lib/kubernetes/pki/server.pem \
+  --tls-private-key-file=/var/lib/kubernetes/pki/server-key.pem \
+  --service-account-key-file=/var/lib/kubernetes/pki/sa.pub \
+  --kubelet-client-certificate=/var/lib/kubernetes/pki/kubelet-client.pem \
+  --kubelet-client-key=/var/lib/kubernetes/pki/kubelet-client-key.pem \
+  --enable-bootstrap-token-auth=true \
+  --v=2
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+[Install]
+
+// Controller Manager
+[Unit]
+Description=Kubernetes Controller Manager
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+[Service]
+ExecStart=/usr/bin/kube-controller-manager \
+  --address=127.0.0.1 \
+  --cluster-cidr=10.38.0.0/16 \
+  --cluster-name=kubernetes \
+  --master=http://127.0.0.1:8080 \
+  --service-cluster-ip-range=10.32.0.0/16 \
+  --service-account-private-key-file=/var/lib/kubernetes/pki/sa.key \
+  --root-ca-file=/var/lib/kubernetes/pki/ca.pem \
+  --cluster-signing-cert-file=/var/lib/kubernetes/pki/worker-ca.pem \
+  --cluster-signing-key-file=/var/lib/kubernetes/pki/worker-ca-key.pem \
+  --v=6
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+
+// Scheduler
+[Unit]
+Description=Kubernetes Scheduler
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+[Service]
+ExecStart=/usr/bin/kube-scheduler \
+  --address=127.0.0.1 \
+  --master=http://127.0.0.1:8080 \
+  --v=2
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+
+==========================
+master certificates
+==========================
+
+openssl x509 -in /var/lib/kubernetes/pki/ca.pem -noout -issuer -subject
+issuer= /C=IT/ST=Italy/L=Milan/CN=Server CA
+subject= /C=IT/ST=Italy/L=Milan/CN=Server CA
+
+openssl x509 -in /var/lib/kubernetes/pki/server.pem -noout -issuer -subject
+issuer= /C=IT/ST=Italy/L=Milan/CN=Server CA
+subject= /CN=apiserver
+
+openssl x509 -in client-ca.pem -noout -issuer -subject
+issuer= /CN=Client CA
+subject= /CN=Client CA
+
+openssl x509 -in worker-ca.pem -noout -issuer -subject
+issuer= /CN=Worker CA
+subject= /CN=Worker CA
+
+cat client-ca.pem > bundle-ca.pem && and cat worker-ca.pem >> bundle-ca.pem
+
+openssl x509 -in /var/lib/kubernetes/pki/kubelet-client.pem -noout -issuer -subject
+issuer= /C=IT/ST=Italy/L=Milan/CN=Server CA
+subject= /O=system:masters/CN=kubelet-client
+
+
+
+==========================
+workers services
+==========================
+
+//Kubelet
+[Unit]
+Description=Kubernetes Kubelet Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+[Service]
+ExecStart=/usr/bin/kubelet \
+  --allow-privileged=true \
+  --cluster-dns=10.32.0.10 \
+  --cluster-domain=cluster.local \
+  --container-runtime=docker \
+  --cgroup-driver=systemd \
+  --serialize-image-pulls=false \
+  --register-node=true \
+  --network-plugin=cni \
+  --cni-bin-dir=/etc/cni/bin \
+  --cni-conf-dir=/etc/cni/config \
+  --require-kubeconfig=true \
+  --bootstrap-kubeconfig=/var/lib/kubelet/kubelet-bootstrap \
+  --anonymous-auth=false \
+  --client-ca-file=/var/lib/kubernetes/pki/ca.pem \
+  --v=2
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+
+[root@kubew03 ~]# cat /var/lib/kubelet/kubelet-bootstrap
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority: /var/lib/kubernetes/pki/ca.pem
+    server: https://kubem00:443
+  name: kubernetes
+contexts:
+- context:
+    cluster: kubernetes
+    user: kubelet-bootstrap
+  name: kubelet-bootstrap@kubernetes
+current-context: kubelet-bootstrap@kubernetes
+kind: Config
+preferences: {}
+users:
+- name: kubelet-bootstrap
+  user:
+    as-user-extra: {}
+    token: 0dfc35.a2a4885d748b98a3
+
+// Kube-Proxy
+[Unit]
+Description=Kubernetes Kube-Proxy Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+[Service]
+ExecStart=/usr/bin/kube-proxy \
+  --cluster-cidr=10.38.0.0/16 \
+  --proxy-mode=iptables \
+  --kubeconfig=/var/lib/kube-proxy/kubeconfig \
+  --v=2
+Restart=on-failure
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+
+[root@kubew03 ~]# cat /var/lib/kube-proxy/kubeconfig
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority: /var/lib/kubernetes/pki/ca.pem
+    server: https://kubem00:443
+  name: kubernetes
+contexts:
+- context:
+    cluster: kubernetes
+    user: kube-proxy
+  name: default
+current-context: default
+kind: Config
+preferences: {}
+users:
+- name: kube-proxy
+  user:
+    client-certificate: /var/lib/kube-proxy/pki/kube-proxy.pem
+    client-key: /var/lib/kube-proxy/pki/kube-proxy-key.pem
+
+==========================
+workers certificates
+==========================
+
+// autogenerated
+[root@kubew03 ~]# ll /var/lib/kubelet/pki
+total 16
+-rw-r--r-- 1 root root  928 Nov  4 09:19 kubelet-client.crt
+-rw------- 1 root root  227 Nov  4 09:19 kubelet-client.key
+-rw-r--r-- 1 root root 1103 Nov  4 09:19 kubelet.crt
+-rw------- 1 root root 1679 Nov  4 09:19 kubelet.key
+
+openssl x509 -in /var/lib/kubelet/pki/kubelet-client.crt -noout -issuer -subject
+issuer= /CN=Worker CA
+subject= /O=system:nodes/CN=system:node:kubew03
+
+openssl x509 -in /var/lib/kubelet/pki/kubelet.crt -noout -issuer -subject
+issuer= /CN=kubew03@1509783551
+subject= /CN=kubew03@1509783551
+
+// manual generated
+ll /var/lib/kube-proxy/pki
+total 8
+-rw-r--r-- 1 root root 1679 Nov  2 11:40 kube-proxy-key.pem
+-rw-r--r-- 1 root root 1212 Nov  2 11:40 kube-proxy.pem
+
+openssl x509 -in /var/lib/kube-proxy/pki/kube-proxy.pem -noout -issuer -subject
+issuer= /CN=Worker CA
+subject= /O=system:node-proxier/CN=system:kube-proxy
+
